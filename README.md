@@ -6,4 +6,4 @@ Instead of targeting a dedicated NLP problem, the goal of this project is to app
 Please open the README.ipynb for further details.
 
 ### Model architecture
-![](/Users/laskama/PycharmProjects/NMTindoorLoc/img/model_architecture.png)
+![](img/model_architecture.png)
