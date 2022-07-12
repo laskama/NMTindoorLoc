@@ -8,7 +8,8 @@ import os
 from sklearn.preprocessing import StandardScaler
 
 NANO_PER_MILLI = 1000000
-START_TOKEN = np.array([-10000, 10000])
+# START_TOKEN = np.array([-10000, 10000])
+START_TOKEN = np.array([0, 0])
 
 
 def scale_imu_data(imu):
@@ -240,7 +241,7 @@ def partition_data_via_sliding_window(data_tensor, pos_tensor, imu_seq_length, s
 
 def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_addr=None, seq_to_point=False,
                            add_start_token=False, return_unique_fp_for_sequence=False,
-                           step_size=10, seq_length=200, output_step_size=20):
+                           include_mag=False, step_size=10, seq_length=200, output_step_size=20, forward_fill_rss_scans=False):
     """
     Constructs a joint-source data tensor of IMU and WLAN data. IMU data determines the sequence length (T) of the
     data tensor. WLAN data is aligned by expanding it in the time-domain.
@@ -259,6 +260,8 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
     imu_readings_per_sec = 20
     missing_ap_val = -110.0
 
+    num_imu_channels = 9 if include_mag else 6
+
     acc, gyro, mag, wlan, _ = get_IMU_and_WLAN_of_folder(folder)
 
     acc_tensor, gyro_tensor, mag_tensor, pos_tensor = get_synced_imu_tensors(acc, gyro, mag)
@@ -267,13 +270,23 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
 
     wlan_tensor, unique_mac_addr = construct_wlan_tensor(wlan, len(acc_tensor), missing_ap_val, imu_readings_per_sec, unique_mac_addr)
 
+    if forward_fill_rss_scans:
+        wlan_tensor = forward_fill_rss_values_2d(wlan_tensor)
+
     # merge into large data tensor
-    data_tensor = np.concatenate((
-        acc_tensor,
-        gyro_tensor,
-        # mag_tensor,
-        wlan_tensor),
-        axis=1)
+    if include_mag:
+        data_tensor = np.concatenate((
+            acc_tensor,
+            gyro_tensor,
+            mag_tensor,
+            wlan_tensor),
+            axis=1)
+    else:
+        data_tensor = np.concatenate((
+            acc_tensor,
+            gyro_tensor,
+            wlan_tensor),
+            axis=1)
 
     # check for nan entries in pos tensor
     not_nan_pos_mask = np.where(~np.any(np.isnan(pos_tensor), axis=1))[0]
@@ -282,6 +295,10 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
 
     data_tensor_windows, pos_tensor_windows = partition_data_via_sliding_window(
         data_tensor, pos_tensor, seq_length, step_size, output_step_size)
+
+    # if forward_fill_rss_scans:
+    #     data_tensor_windows[:, :, num_imu_channels:] = forward_fill_rss_values_3d(
+    #         data_tensor_windows[:, :, num_imu_channels:])
 
     # add start token to pos_tensor
     if add_start_token:
@@ -300,7 +317,7 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
     for seq_idx, seq in enumerate(data_tensor_windows):
         rss = np.full(num_mac, -110.0)
         time = np.zeros(num_mac)
-        wlan_seq = seq[:, 6:]
+        wlan_seq = seq[:, num_imu_channels:]
 
         # generate time tensor that hold relative times with same shape as wlan seq tensor
         time_t = np.concatenate([np.arange(0, 1, 0.005).reshape(-1, 1)] * num_mac, axis=1)
@@ -374,8 +391,15 @@ def _get_multi_source_data(folder="floor_0/S20/2021-12-20T13:46:39", unique_mac_
         wlan_tensor),
         axis=1)
 
-    # check for nan entries in pos tensor
+    # check for nan entries in pos tensor (if they occur in the middle of trajectory, we have
+    # to be careful to avoid jumps in the windows that we create afterwards
     not_nan_pos_mask = np.where(~np.any(np.isnan(pos_tensor), axis=1))[0]
+    jump_idx = np.where(np.diff(not_nan_pos_mask) > 1)[0]
+
+    if len(jump_idx) > 0:
+        return None, None, None
+
+    print(jump_idx)
     data_tensor = data_tensor[not_nan_pos_mask]
     pos_tensor = pos_tensor[not_nan_pos_mask]
 
@@ -430,7 +454,7 @@ def replace_init_pos_by_start_token(pos_tensor_windows):
     return pos_tensor_windows
 
 
-def get_joint_source_data(devices=None, seq_to_point=False, return_unique_fp_for_sequence=False):
+def get_joint_source_data(devices=None, seq_to_point=False, return_unique_fp_for_sequence=False, forward_fill_scans=False, add_start_token=False, include_mag=False):
     """
     Obtains joint-source data (IMU + WLAN) for all trajectories collected by the specified devices
     and merges them together. See documentation of _get_joint_source_data for details.
@@ -452,7 +476,10 @@ def get_joint_source_data(devices=None, seq_to_point=False, return_unique_fp_for
 
     # obtain data for each trajectory
     res = [_get_joint_source_data(df, unique_mac, seq_to_point=seq_to_point,
-                                  return_unique_fp_for_sequence=return_unique_fp_for_sequence) for df in data_folders]
+                                  return_unique_fp_for_sequence=return_unique_fp_for_sequence,
+                                  add_start_token=add_start_token,
+                                  include_mag=include_mag,
+                                  forward_fill_rss_scans=forward_fill_scans) for df in data_folders]
 
     # join data from trajectoreis
     data = np.concatenate([r[0] for r in res])
@@ -510,13 +537,37 @@ def get_multi_source_data(devices=None, step_size=10, seq_length=200, output_ste
                                   seq_length=seq_length, output_step_size=output_step_size) for df in data_folders]
 
     # join data from trajectories
-    imu = np.concatenate([r[0] for r in res])
-    rss = [val for sublist in [r[1] for r in res] for val in sublist]
-    pos = np.concatenate([r[2] for r in res])
+    imu = np.concatenate([r[0] for r in res if r[0] is not None])
+    rss = [val for sublist in [r[1] for r in res if r[0] is not None] for val in sublist]
+    pos = np.concatenate([r[2] for r in res if r[0] is not None])
 
     return imu, rss, pos
 
 
+def forward_fill_rss_values_2d(arr):
+    arr = np.transpose(arr)
+    mask = arr == -110.0  # np.isnan(arr)
+    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    out = arr[np.arange(idx.shape[0])[:, None], idx]
+    out = np.transpose(out)
+
+    return out
+
+
+def forward_fill_rss_values_3d(arr):
+    arr = np.transpose(arr, axes=[0, 2, 1])
+    mask = arr == -110.0  # np.isnan(arr)
+    idx = np.where(~mask, np.arange(mask.shape[2]), 0)
+    np.maximum.accumulate(idx, axis=2, out=idx)
+    grid_idx = np.mgrid[:idx.shape[0], :idx.shape[1]]
+    out = arr[grid_idx[0][:, :, None], grid_idx[1][:, :, None], idx]
+    out = np.transpose(out, axes=[0, 2, 1])
+
+    return out
+
+
 if __name__ == '__main__':
+    data, pos = get_joint_source_data(return_unique_fp_for_sequence=False, seq_to_point=True)
     data, pos, rss_vec, time_vec = get_joint_source_data(return_unique_fp_for_sequence=True)
     imu, wlan, pos = get_multi_source_data()

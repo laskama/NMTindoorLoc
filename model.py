@@ -3,6 +3,31 @@ import torch.nn as nn
 from utils import get_padded_wlan_tensor
 
 
+class HybridSeq2Point(nn.Module):
+    def __init__(self, num_imu, num_ap, hidden_size, coord_dim=2):
+        super(HybridSeq2Point, self).__init__()
+
+        self.dense_distributed = nn.Linear(in_features=num_ap, out_features=hidden_size)
+
+        self.imu_lstm = nn.LSTM(input_size=num_imu + hidden_size, hidden_size=hidden_size, bidirectional=False, batch_first=True)
+
+        # output layer
+        self.output_projection = nn.Linear(in_features=hidden_size, out_features=coord_dim, bias=True)
+
+        self.apply(_weights_init)
+
+    def forward(self, source_imu: torch.Tensor, source_rss: torch.Tensor) -> torch.Tensor:
+        rss_output = torch.relu(self.dense_distributed(source_rss))
+
+        lstm_input = torch.concat((source_imu, rss_output), dim=-1)
+
+        lstm_output, (hn, cn) = self.imu_lstm(lstm_input)
+
+        output = self.output_projection(lstm_output[:, -1, :])
+
+        return output
+
+
 class StaticBaseline(nn.Module):
     """
     Baseline model that is meant for validating whether absolute position can be extracted from static
@@ -461,3 +486,11 @@ class MultiSourceCrossAttention(MultiSourceEncoder):
         combined_output = O_t
 
         return dec_state, combined_output
+
+
+def _weights_init(m):
+    if isinstance(m, nn.LSTM):
+        nn.init.xavier_normal_(m.weight_ih_l0)
+        nn.init.xavier_normal_(m.weight_hh_l0)
+        #nn.init.xavier_normal_(m.weight_ih_l0_reverse)
+        #nn.init.xavier_normal_(m.weight_hh_l0_reverse)

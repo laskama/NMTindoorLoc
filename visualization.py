@@ -74,6 +74,7 @@ def visualize_data_time_distribution(acc, gyro, mag, wlan):
 def visualize_predictions(true, pred, seq_to_point=False, draw_individually=False):
     floor_dims = pd.read_csv("giaIndoorLoc/floor_dimensions.csv").iloc[1, 1:]
 
+    # fp = FloorplanPlot(floor_dims, floorplan_bg_img="giaIndoorLoc/floor_1/floorplan.jpg")
     for b_idx in range(len(true)):
 
         fp = FloorplanPlot(floor_dims, floorplan_bg_img="giaIndoorLoc/floor_1/floorplan.jpg")
