@@ -1,9 +1,8 @@
-from data_provider import get_joint_source_data, get_scan_data_of_devices, get_multi_source_data
+from data_provider import get_joint_source_data, get_scan_data_of_devices, get_multi_source_data, scale_imu_data
 from dataset import Seq2PointDataset
 from loss import custom_loss
 from model import JointSeq2Seq, JointSeq2Point, StaticBaseline, SingleFPencoder, MultiSourceEncoder, MultiSourceCrossAttention, HybridSeq2Point
-from model_tf import get_tf_model, get_tf_seq2seq_train_model, decode_sequence, get_tf_seq2seq_encoder_model, \
-    get_tf_seq2seq_decoder_model, NMTindoorLoc, decode_sequence_new
+from model_tf import NMTindoorLoc
 import numpy as np
 import torch
 import torch.nn as nn
@@ -19,7 +18,7 @@ from utils import batch_iter, batch_iter_no_tensor
 from visualization import visualize_predictions
 
 
-def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_encoder=False, hidden_size=256, model_name="s2s"):
+def train_tf_model(fit_model=False, include_mag=False, hidden_size=256, num_epochs=20, model_name="s2s"):
     data, pos = get_joint_source_data(devices=['S20', 'Galaxy', 'OnePlus'],
                                       return_unique_fp_for_sequence=False,
                                       forward_fill_scans=True,
@@ -29,39 +28,34 @@ def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_en
 
     num_imu_channels = 9 if include_mag else 6
 
+    # decouple input data
     imu = data[:, :, :num_imu_channels]
     rss = data[:, :, num_imu_channels:]
 
     # imu and pos data dimensions
-    N, T, M = np.shape(imu)
     _, T_pos, _ = np.shape(pos)
 
     # scale imu data
-    imu = np.reshape(imu, [-1, M])
-    data_scaler = StandardScaler()
-    imu = data_scaler.fit_transform(imu)
-    imu = np.reshape(imu, [-1, T, M])
+    imu = scale_imu_data(imu)
 
     # scale rss data
     max_rss = -40.0
     min_rss = -110.0
     rss = (rss - min_rss) / (max_rss - min_rss)
 
+    # split into train/test data
     imu_train, imu_test, rss_train, rss_test, pos_train, pos_test = train_test_split(imu, rss, pos, test_size=0.2, random_state=1, shuffle=True)
 
+    # Prepare position data for teacher forced sequence prediction (target will be offset by 1)
     dec_init = pos_train[:, :-1, :]
     dec_target = pos_train[:, 1:, :]
 
-    # model = get_tf_seq2seq_train_model(num_ap=np.shape(rss)[2], num_imu=num_imu_channels, hidden_size=hidden_size, seq_length=T, out_seq_length=T_pos-1, bidirectional_encoder=bidirectional_encoder)
-
+    # construct tensorflow model and compile
     model = NMTindoorLoc(hidden_size=hidden_size, cross_attention=False)
-
-    # define loss function
-    mse = tf.keras.losses.MeanSquaredError()
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),
-        loss=mse
+        loss=tf.keras.losses.MeanSquaredError()
     )
 
     if fit_model:
@@ -69,33 +63,23 @@ def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_en
             (imu_train, rss_train, dec_init),
             dec_target,
             batch_size=32,
-            epochs=10,
+            epochs=num_epochs,
         )
 
         model.save_weights(model_name + ".hdf5")
-        # model.save(model_name)
 
     model.load_weights(model_name + ".hdf5")  # = tf.keras.models.load_model(model_name)
 
-    # encoder_model = get_tf_seq2seq_encoder_model(model, bidirectional_encoder=bidirectional_encoder)
-    # decoder_model = get_tf_seq2seq_decoder_model(model, hidden_size=2 * hidden_size if bidirectional_encoder else hidden_size)
-
-    # sample test indices
+    # sample random sequence of test indices
     s_idx = np.random.choice(np.arange(len(imu_test)), len(imu_test), replace=False)
 
-    traj_b = model.predict_seq([imu_test[s_idx[:]], rss_test[s_idx[:]]])
+    # predict sequences with learned model (uses prior pos prediction as next input of decoder)
+    pred_seq = model.predict_seq([imu_test[s_idx[:]], rss_test[s_idx[:]]])
+    true_seq = pos_test[s_idx, 1:, :]
 
-    # decode_sequence_new([imu_test[s_idx[:32]], rss_test[s_idx[:32]]], model.encoder, model.decoder)
+    print("Regular mean error: {}".format(np.mean(np.linalg.norm(true_seq - pred_seq, axis=-1))))
 
-    # compute predictions in teacher-forced setting (not-valid, only for )
-    traj_a = model.predict((imu_test[s_idx], rss_test[s_idx], pos_test[s_idx, :-1, :]))
-    true = pos_test[s_idx, 1:, :]
-    print("Teacher-forced mean error: {}".format(np.mean(np.linalg.norm(true - traj_a, axis=-1))))
-
-    # traj_b = decode_sequence((imu_test[s_idx], rss_test[s_idx]), encoder_model, decoder_model, init_pos=None) #pos_test[s_idx, 0, :][:, None, :])
-    print("Regular mean error: {}".format(np.mean(np.linalg.norm(true[:] - traj_b, axis=-1))))
-
-    visualize_predictions(pos_test[s_idx, 1:, :], traj_b, seq_to_point=False, draw_individually=True)
+    visualize_predictions(pos_test[s_idx, 1:, :], pred_seq)
 
 
 def train_hybrid_seq2point_dl():
