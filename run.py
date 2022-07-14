@@ -3,7 +3,7 @@ from dataset import Seq2PointDataset
 from loss import custom_loss
 from model import JointSeq2Seq, JointSeq2Point, StaticBaseline, SingleFPencoder, MultiSourceEncoder, MultiSourceCrossAttention, HybridSeq2Point
 from model_tf import get_tf_model, get_tf_seq2seq_train_model, decode_sequence, get_tf_seq2seq_encoder_model, \
-    get_tf_seq2seq_decoder_model
+    get_tf_seq2seq_decoder_model, NMTindoorLoc, decode_sequence_new
 import numpy as np
 import torch
 import torch.nn as nn
@@ -19,7 +19,7 @@ from utils import batch_iter, batch_iter_no_tensor
 from visualization import visualize_predictions
 
 
-def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_encoder=False, hidden_size=256):
+def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_encoder=False, hidden_size=256, model_name="s2s"):
     data, pos = get_joint_source_data(devices=['S20', 'Galaxy', 'OnePlus'],
                                       return_unique_fp_for_sequence=False,
                                       forward_fill_scans=True,
@@ -52,7 +52,9 @@ def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_en
     dec_init = pos_train[:, :-1, :]
     dec_target = pos_train[:, 1:, :]
 
-    model = get_tf_seq2seq_train_model(num_ap=np.shape(rss)[2], num_imu=num_imu_channels, hidden_size=hidden_size, seq_length=T, out_seq_length=T_pos-1, bidirectional_encoder=bidirectional_encoder)
+    # model = get_tf_seq2seq_train_model(num_ap=np.shape(rss)[2], num_imu=num_imu_channels, hidden_size=hidden_size, seq_length=T, out_seq_length=T_pos-1, bidirectional_encoder=bidirectional_encoder)
+
+    model = NMTindoorLoc(hidden_size=hidden_size, cross_attention=False)
 
     # define loss function
     mse = tf.keras.losses.MeanSquaredError()
@@ -67,28 +69,33 @@ def train_hybrid_seq2seq_tf(fit_model=False, include_mag=False, bidirectional_en
             (imu_train, rss_train, dec_init),
             dec_target,
             batch_size=32,
-            epochs=20,
+            epochs=10,
         )
 
-        model.save("s2s")
+        model.save_weights(model_name + ".hdf5")
+        # model.save(model_name)
 
-    model = tf.keras.models.load_model("s2s")
+    model.load_weights(model_name + ".hdf5")  # = tf.keras.models.load_model(model_name)
 
-    encoder_model = get_tf_seq2seq_encoder_model(model, bidirectional_encoder=bidirectional_encoder)
-    decoder_model = get_tf_seq2seq_decoder_model(model, hidden_size=2 * hidden_size if bidirectional_encoder else hidden_size)
+    # encoder_model = get_tf_seq2seq_encoder_model(model, bidirectional_encoder=bidirectional_encoder)
+    # decoder_model = get_tf_seq2seq_decoder_model(model, hidden_size=2 * hidden_size if bidirectional_encoder else hidden_size)
 
     # sample test indices
     s_idx = np.random.choice(np.arange(len(imu_test)), len(imu_test), replace=False)
+
+    traj_b = model.predict_seq([imu_test[s_idx[:]], rss_test[s_idx[:]]])
+
+    # decode_sequence_new([imu_test[s_idx[:32]], rss_test[s_idx[:32]]], model.encoder, model.decoder)
 
     # compute predictions in teacher-forced setting (not-valid, only for )
     traj_a = model.predict((imu_test[s_idx], rss_test[s_idx], pos_test[s_idx, :-1, :]))
     true = pos_test[s_idx, 1:, :]
     print("Teacher-forced mean error: {}".format(np.mean(np.linalg.norm(true - traj_a, axis=-1))))
 
-    traj_b = decode_sequence((imu_test[s_idx], rss_test[s_idx]), encoder_model, decoder_model, init_pos=None) #pos_test[s_idx, 0, :][:, None, :])
-    print("Regular mean error: {}".format(np.mean(np.linalg.norm(true - traj_b, axis=-1))))
+    # traj_b = decode_sequence((imu_test[s_idx], rss_test[s_idx]), encoder_model, decoder_model, init_pos=None) #pos_test[s_idx, 0, :][:, None, :])
+    print("Regular mean error: {}".format(np.mean(np.linalg.norm(true[:] - traj_b, axis=-1))))
 
-    visualize_predictions(pos_test[s_idx, 1:, :], traj_b, seq_to_point=False)
+    visualize_predictions(pos_test[s_idx, 1:, :], traj_b, seq_to_point=False, draw_individually=True)
 
 
 def train_hybrid_seq2point_dl():
@@ -510,7 +517,7 @@ def train_seq(save_path, fit_model=True):
 
             print("epoch {} finished".format(epoch))
 
-        torch.save(model.state_dict(), save_path)
+        # torch.save(model.state_dict(), save_path)
 
     model.load_state_dict(torch.load(save_path))
     model.eval()
@@ -644,7 +651,7 @@ def train_point():
 
 
 if __name__ == '__main__':
-    train_hybrid_seq2seq_tf(fit_model=True, bidirectional_encoder=True)
+    train_hybrid_seq2seq_tf(fit_model=True, bidirectional_encoder=False, model_name="att_v2")
     # train_hybrid_seq2point_dl()
     # train_hybrid_seq2point_tf()
     # train_hybrid_seq2point(save_path="hybridseq2point.pt", fit_model=True)

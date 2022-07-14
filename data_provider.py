@@ -297,8 +297,7 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
         data_tensor, pos_tensor, seq_length, step_size, output_step_size)
 
     # if forward_fill_rss_scans:
-    #     data_tensor_windows[:, :, num_imu_channels:] = forward_fill_rss_values_3d(
-    #         data_tensor_windows[:, :, num_imu_channels:])
+    #     data_tensor_windows = forward_fill_rss_values_3d(data_tensor_windows)
 
     # add start token to pos_tensor
     if add_start_token:
