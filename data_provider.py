@@ -208,8 +208,27 @@ def construct_wlan_tensor(wlan_df, len_IMU_tensor, missing_ap_val=-110.0, imu_re
 
     num_mac = len(unique_mac_addr)
 
-    wlan_tensor = np.full((len_IMU_tensor, num_mac), missing_ap_val)
+    wlan_tensor = np.full((len_IMU_tensor, num_mac), np.nan)
 
+    # identify detected APs per scan
+    w_scans = wlan_df.groupby(['id'])
+    scan_mac = w_scans['mac'].apply(list).reset_index()
+
+    # determine entire scanning window time frame
+    scan_time = w_scans.agg({'time': ['min', 'max']})
+    scan_time /= imu_readings_per_sec
+    scan_time = scan_time.round(decimals=0).astype(int)
+
+    # during scan window -> set all non-detected APs to -110.0
+    # (important for later forward fill to reset non-detected APs)
+    for s_idx in range(len(scan_time)):
+        time = scan_time.iloc[s_idx, :]
+        detected_mac_addr = np.array(scan_mac.iloc[s_idx, 1])
+        non_det_mac = np.setdiff1d(unique_mac_addr, detected_mac_addr)
+        mac_pos = [np.where(unique_mac_addr == m)[0][0] for m in non_det_mac]
+        wlan_tensor[time[0]:time[1], mac_pos] = missing_ap_val
+
+    # set RSS values on per MAC addr basis for efficiency
     for mac_id, mac in enumerate(unique_mac_addr):
         sub = wlan_df[wlan_df['mac'] == mac]
         sub['time'] /= imu_readings_per_sec
@@ -272,6 +291,8 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
 
     if forward_fill_rss_scans:
         wlan_tensor = forward_fill_rss_values_2d(wlan_tensor)
+    else:
+        wlan_tensor = np.where(np.isnan(wlan_tensor), missing_ap_val, wlan_tensor)
 
     # merge into large data tensor
     if include_mag:
@@ -295,9 +316,6 @@ def _get_joint_source_data(folder="floor_1/S20/2021-12-20T13:19:42", unique_mac_
 
     data_tensor_windows, pos_tensor_windows = partition_data_via_sliding_window(
         data_tensor, pos_tensor, seq_length, step_size, output_step_size)
-
-    # if forward_fill_rss_scans:
-    #     data_tensor_windows = forward_fill_rss_values_3d(data_tensor_windows)
 
     # add start token to pos_tensor
     if add_start_token:
@@ -545,23 +563,15 @@ def get_multi_source_data(devices=None, step_size=10, seq_length=200, output_ste
 
 def forward_fill_rss_values_2d(arr):
     arr = np.transpose(arr)
-    mask = arr == -110.0  # np.isnan(arr)
+    mask = np.isnan(arr)
+    # mask = arr == -110.0  # np.isnan(arr)
     idx = np.where(~mask, np.arange(mask.shape[1]), 0)
     np.maximum.accumulate(idx, axis=1, out=idx)
     out = arr[np.arange(idx.shape[0])[:, None], idx]
     out = np.transpose(out)
 
-    return out
-
-
-def forward_fill_rss_values_3d(arr):
-    arr = np.transpose(arr, axes=[0, 2, 1])
-    mask = arr == -110.0  # np.isnan(arr)
-    idx = np.where(~mask, np.arange(mask.shape[2]), 0)
-    np.maximum.accumulate(idx, axis=2, out=idx)
-    grid_idx = np.mgrid[:idx.shape[0], :idx.shape[1]]
-    out = arr[grid_idx[0][:, :, None], grid_idx[1][:, :, None], idx]
-    out = np.transpose(out, axes=[0, 2, 1])
+    # fill initial values
+    out = np.where(np.isnan(out), -110.0, out)
 
     return out
 
