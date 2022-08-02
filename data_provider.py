@@ -8,7 +8,6 @@ import os
 from sklearn.preprocessing import StandardScaler
 
 NANO_PER_MILLI = 1000000
-# START_TOKEN = np.array([-10000, 10000])
 START_TOKEN = np.array([0, 0])
 
 
@@ -562,6 +561,14 @@ def get_multi_source_data(devices=None, step_size=10, seq_length=200, output_ste
 
 
 def forward_fill_rss_values_2d(arr):
+    """
+    Forward fills obtained scan RSS scan values until next
+    scan is received. Old scan values should be fed as input as
+    long as no new scan is received.
+    :param arr: Numpy array containing the sparse RSS scans
+                (values that should be filled are np.nan)
+    :return: Forward filled numpy array
+    """
     arr = np.transpose(arr)
     mask = np.isnan(arr)
     # mask = arr == -110.0  # np.isnan(arr)

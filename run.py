@@ -1,21 +1,15 @@
-from data_provider import get_joint_source_data, get_scan_data_of_devices, get_multi_source_data, scale_imu_data
-from dataset import Seq2PointDataset, Seq2SeqDataset
-from loss import custom_loss
-from model import JointSeq2Seq, JointSeq2Point, StaticBaseline, SingleFPencoder, MultiSourceEncoder, MultiSourceCrossAttention, HybridSeq2Point
+from data_provider import get_joint_source_data, scale_imu_data
+from dataset import Seq2SeqDataset
 from model_pt import NMTindoorLocPT
 from model_tf import NMTindoorLoc
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-# PyTorch TensorBoard support
 from torch.utils.tensorboard import SummaryWriter
-from datetime import datetime
 
 
-from utils import batch_iter, batch_iter_no_tensor
 from visualization import visualize_predictions
 
 
@@ -31,59 +25,39 @@ def train_pt_model(hidden_size=256, num_epochs=1):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    def train_one_epoch(epoch_index, tb_writer):
+    def train_one_epoch():
 
-        # Here, we use enumerate(training_loader) instead of
-        # iter(training_loader) so that we can track the batch
-        # index and do some intra-epoch reporting
         for i, data in enumerate(training_loader):
             # Every data instance is an input + label pair
             inputs, labels = data
 
-            # Zero your gradients for every batch!
             optimizer.zero_grad()
 
-            # Make predictions for this batch
             outputs = model(inputs)
 
-            # Compute the loss and its gradients
             loss = loss_fn(outputs, labels)
             loss.backward()
 
-            # Adjust learning weights
             optimizer.step()
 
         return loss
 
-    # Initializing in a separate cell so we can easily add more epochs to the same run
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    writer = SummaryWriter('runs/fashion_trainer_{}'.format(timestamp))
-    epoch_number = 0
 
     EPOCHS = num_epochs
 
     best_vloss = 1_000_000.
 
     for epoch in range(EPOCHS):
-        print('EPOCH {}:'.format(epoch_number + 1))
+        print('EPOCH {}:'.format(epoch + 1))
 
         # Make sure gradient tracking is on, and do a pass over the data
         model.train(True)
-        avg_loss = train_one_epoch(epoch_number, writer)
+        avg_loss = train_one_epoch()
 
         # We don't need gradients on to do reporting
         model.train(False)
 
         print('LOSS train {}'.format(avg_loss))
-
-        # Log the running loss averaged per batch
-        # for both training and validation
-        writer.add_scalars('Training vs. Validation Loss',
-                           {'Training': avg_loss},
-                           epoch_number + 1)
-        writer.flush()
-
-        epoch_number += 1
 
     # sample random sequence of test indices
     test_ds = Seq2SeqDataset(devices=['OnePlus'], train=True, num_imu_channels=num_imu_channels)

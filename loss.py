@@ -18,7 +18,7 @@ def custom_loss(output, target):
 
     loss = abs_loss + relative_loss
 
-    return relative_loss
+    return loss
 
 
 if __name__ == '__main__':
