@@ -10,6 +10,9 @@ from sklearn.preprocessing import StandardScaler
 NANO_PER_MILLI = 1000000
 START_TOKEN = np.array([0, 0])
 
+# disable pandas warning
+pd.options.mode.chained_assignment = None
+
 
 def scale_imu_data(imu):
     N, T, M = np.shape(imu)

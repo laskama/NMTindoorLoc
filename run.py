@@ -16,7 +16,7 @@ from visualization import visualize_predictions
 def train_pt_model(hidden_size=256, num_epochs=1):
     num_imu_channels = 6
 
-    training_loader = torch.utils.data.DataLoader(Seq2SeqDataset(devices=['OnePlus'], train=True, num_imu_channels=num_imu_channels, transform=torch.Tensor), batch_size=32, shuffle=True)
+    training_loader = torch.utils.data.DataLoader(Seq2SeqDataset(devices=['S20', 'Galaxy', 'OnePlus'], train=True, num_imu_channels=num_imu_channels, transform=torch.Tensor), batch_size=32, shuffle=True)
 
     # construct PyTorch model
     model = NMTindoorLocPT(hidden_size=hidden_size, num_imu=num_imu_channels, num_ap=np.shape(training_loader.dataset.rss)[-1])
@@ -60,7 +60,7 @@ def train_pt_model(hidden_size=256, num_epochs=1):
         print('LOSS train {}'.format(avg_loss))
 
     # sample random sequence of test indices
-    test_ds = Seq2SeqDataset(devices=['OnePlus'], train=True, num_imu_channels=num_imu_channels)
+    test_ds = Seq2SeqDataset(devices=['OnePlus'], train=False, num_imu_channels=num_imu_channels)
     s_idx = np.random.choice(np.arange(len(test_ds.imu)), len(test_ds.imu), replace=False)
 
     # predict sequences with learned model (uses prior pos prediction as next input of decoder)
